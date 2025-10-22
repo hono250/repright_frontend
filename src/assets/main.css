@@ -1,0 +1,47 @@
+:root {
+  --bg-dark: #0a0a0a;
+  --bg-card: #1a1a1a;
+  --yellow-glow: rgba(255, 215, 0, 0.12);
+  --yellow-bright: #ffd700;
+  --text: #ffffff;
+  --text-dim: #888;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg-dark);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  padding: 2rem;
+}
+
+.set-card {
+  background: var(--yellow-glow);
+  border: 1px solid var(--yellow-bright);
+  padding: 1rem;
+  margin: 0.5rem 0;
+  border-radius: 8px;
+}
+
+input, button {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--yellow-bright);
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin: 0.5rem;
+}
+
+button {
+  cursor: pointer;
+  background: var(--yellow-glow);
+}
+
+button:hover {
+  background: rgba(255, 215, 0, 0.25);
+}
