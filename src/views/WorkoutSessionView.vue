@@ -21,6 +21,7 @@ const showCancelModal = ref(false)
 const showFinishModal = ref(false)
 const exerciseToDelete = ref(null)
 const showDeleteExerciseModal = ref(false)
+const showAIModal = ref(false) // TODO: A5 get actual AI recomendation 
 
 // Exercise structure:
 // {
@@ -388,7 +389,9 @@ const confirmCancel = () => {
         <div class="exercise-header">
           <h3 class="exercise-name">{{ exercise.name }}</h3>
             <div class="exercise-actions">
-              <button class="ai-btn">AI 🤖</button>
+              <button @click="showAIModal = true"class="ai-btn">
+                AI 🤖
+              </button>
               <button @click="deleteExercise(exIndex)" class="delete-btn" title="Delete exercise">
             🗑️
             </button>
@@ -581,6 +584,17 @@ const confirmCancel = () => {
       cancelText="Cancel"
       @confirm="confirmDeleteExercise"
       @cancel="showDeleteExerciseModal = false"
+    />
+
+    <!-- AI Coming Soon Modal -->
+    <ConfirmModal
+      :show="showAIModal"
+      title="AI Recommendations"
+      message="AI-powered progression guidance will be available in A5. This feature will analyze your workout history and suggest optimal weight, reps, and identify plateaus."
+      confirmText="Got it"
+      confirmVariant="primary"
+      @confirm="showAIModal = false"
+      @cancel="showAIModal = false"
     />
 
   </div>
