@@ -25,6 +25,12 @@ const router = createRouter({
       name: 'Home',
       component: HomeView,
       meta: { requiresAuth: true } // TODO: implement auth guard later
+    },
+    {
+      path: '/workout',
+      name: 'WorkoutSession',
+      component: () => import('./views/WorkoutSessionView.vue'),
+      meta: { requiresAuth: true }
     }
   ]
 })
