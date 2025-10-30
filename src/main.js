@@ -31,7 +31,20 @@ const router = createRouter({
       name: 'WorkoutSession',
       component: () => import('./views/WorkoutSessionView.vue'),
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/template/create',
+      name: 'CreateTemplate',
+      component: () => import('./views/TemplateFormView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/template/edit/:templateName',
+      name: 'EditTemplate',
+      component: () => import('./views/TemplateFormView.vue'),
+      meta: { requiresAuth: true }
     }
+
   ]
 })
 

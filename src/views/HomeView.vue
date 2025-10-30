@@ -67,9 +67,19 @@ const openTemplate = (template) => {
   showTemplateModal.value = true
 }
 
+// Edit template
+const editTemplate = (template) => {
+  router.push(`/template/edit/${encodeURIComponent(template.name)}`)
+  showTemplateModal.value = false
+}
+
 // Start workout from template
 const startWorkout = (template) => {
-  router.push(`/workout?template=${template.name}`)
+  router.push({
+    path: '/workout',
+    query: { template: template.name }
+  })
+  showTemplateModal.value = false
 }
 
 // Format last performed date
@@ -169,6 +179,9 @@ const handleLogout = () => {
 
         <!-- Actions -->
         <div class="modal-actions">
+          <AppButton variant="secondary" @click="editTemplate(selectedTemplate)">
+            Edit Template
+          </AppButton>
           <AppButton variant="secondary" @click="showTemplateModal = false">
             Close
           </AppButton>

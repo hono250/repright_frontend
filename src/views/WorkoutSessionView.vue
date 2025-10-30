@@ -82,11 +82,19 @@ const loadTemplate = async () => {
       console.error('Failed to load template:', data.error)
       return
     }
+
+    // Access the nested template object
+    const template = data.template
+
+    if (!template || !template.exercises) {
+      console.error('Invalid template structure')
+      return
+    }
     
     // Convert template to workout session format
-    exercises.value = data.exercises.map(ex => ({
+    exercises.value = template.exercises.map(ex => ({
       name: ex.exercise,
-      trackingType: 'reps', // DEFAULT - need to fetch this from ExerciseLibrary
+      trackingType: 'reps', // Will be updated by fetchExerciseDetails
       sets: ex.sets.map(set => ({
         targetWeight: set.targetWeight,
         targetReps: set.targetReps,
@@ -94,9 +102,9 @@ const loadTemplate = async () => {
         previousWeight: null, // TODO: Fetch from WorkoutLog
         previousReps: null,
         previousDuration: null,
-        actualWeight: null,
-        actualReps: null,
-        actualDuration: null,
+        actualWeight: set.targetWeight, // Pre-fill from template
+        actualReps: set.targetReps,     // Pre-fill from template
+        actualDuration: set.targetDuration, // Pre-fill from template
         completed: false,
         restTimer: set.restTimer || 90
       }))
@@ -106,7 +114,8 @@ const loadTemplate = async () => {
     await fetchPreviousWorkouts()
 
     // Fetch exercise details to get trackingType
-   await fetchExerciseDetails()
+    await fetchExerciseDetails()
+
     
   } catch (err) {
     console.error('Error loading template:', err)
@@ -329,9 +338,9 @@ const finishWorkout = () => {
 }
 
 const confirmFinish = () => {
-  // TODO A5: Save sets to WorkoutLog
-  // TODO A5: Prompt to save as template
-  // TODO A5: Prompt for template changes
+  // TODO: Save sets to WorkoutLog
+  // TODO: Prompt to save as template
+  // TODO: Prompt for template changes
   
   alert('Workout saved! (Full saving in A5)')
   router.push('/home')

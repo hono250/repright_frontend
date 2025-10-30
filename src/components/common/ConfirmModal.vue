@@ -22,7 +22,7 @@ const props = defineProps({
   },
   cancelText: {
     type: String,
-    default: 'Cancel'
+    default: ''
   }
 })
 
@@ -36,7 +36,10 @@ const emit = defineEmits(['confirm', 'cancel'])
       <p class="modal-message">{{ message }}</p>
       
       <div class="modal-actions">
-        <button @click="$emit('cancel')" class="modal-btn cancel-btn">
+        <button 
+        v-if="cancelText && cancelText.length > 0"
+        @click="$emit('cancel')" 
+        class="modal-btn cancel-btn">
           {{ cancelText }}
         </button>
         <button 
