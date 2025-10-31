@@ -21,7 +21,9 @@ const showCancelModal = ref(false)
 const showFinishModal = ref(false)
 const exerciseToDelete = ref(null)
 const showDeleteExerciseModal = ref(false)
-const showAIModal = ref(false) // TODO: A5 get actual AI recomendation 
+const showAIModal = ref(false) // TODO: get actual AI recomendation 
+const showTemplateUpdatePrompt = ref(false)
+const originalTemplate = ref(null)
 
 // Exercise structure:
 // {
@@ -90,6 +92,9 @@ const loadTemplate = async () => {
       console.error('Invalid template structure')
       return
     }
+
+    // STORE ORIGINAL for comparison later
+    originalTemplate.value = JSON.parse(JSON.stringify(template))
     
     // Convert template to workout session format
     exercises.value = template.exercises.map(ex => ({
@@ -110,8 +115,8 @@ const loadTemplate = async () => {
       }))
     }))
     
-    // Fetch previous workout data for each exercise
-    await fetchPreviousWorkouts()
+    // // Fetch previous workout data for each exercise
+    // await fetchPreviousWorkouts()
 
     // Fetch exercise details to get trackingType
     await fetchExerciseDetails()
@@ -123,35 +128,35 @@ const loadTemplate = async () => {
 }
 
 // Fetch previous workout data
-const fetchPreviousWorkouts = async () => {
-  const userId = localStorage.getItem('userId')
+// const fetchPreviousWorkouts = async () => {
+//   const userId = localStorage.getItem('userId')
   
-  for (const exercise of exercises.value) {
-    try {
-      const response = await fetch('http://localhost:8000/api/WorkoutLog/getLastWorkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: userId,
-          exercise: exercise.name
-        })
-      })
+//   for (const exercise of exercises.value) {
+//     try {
+//       const response = await fetch('http://localhost:8000/api/WorkoutLog/getLastWorkout', {
+//         method: 'POST',
+//         headers: { 'Content-Type': 'application/json' },
+//         body: JSON.stringify({
+//           user: userId,
+//           exercise: exercise.name
+//         })
+//       })
       
-      const data = await response.json()
+//       const data = await response.json()
       
-      if (!data.error && data.workout) {
-        // Pre-fill first set with previous data
-        if (exercise.sets.length > 0) {
-          exercise.sets[0].previousWeight = data.workout.weight
-          exercise.sets[0].previousReps = data.workout.reps
-          exercise.sets[0].previousDuration = data.workout.duration
-        }
-      }
-    } catch (err) {
-      // No previous workout - that's okay
-    }
-  }
-}
+//       if (!data.error && data.workout) {
+//         // Pre-fill first set with previous data
+//         if (exercise.sets.length > 0) {
+//           exercise.sets[0].previousWeight = data.workout.weight
+//           exercise.sets[0].previousReps = data.workout.reps
+//           exercise.sets[0].previousDuration = data.workout.duration
+//         }
+//       }
+//     } catch (err) {
+//       // No previous workout - that's okay
+//     }
+//   }
+// }
 
 // Fetch exercise details to get trackingType
 const fetchExerciseDetails = async () => {
@@ -337,15 +342,139 @@ const finishWorkout = () => {
   showFinishModal.value = true
 }
 
-const confirmFinish = () => {
-  // TODO: Save sets to WorkoutLog
-  // TODO: Prompt to save as template
-  // TODO: Prompt for template changes
+const confirmFinish = async () => {
+
+  showFinishModal.value = false  // Close the modal first
   
-  alert('Workout saved! (Full saving in A5)')
-  router.push('/home')
+  if (!canFinishWorkout.value) return
+  
+  const userId = localStorage.getItem('userId')
+  
+  try {
+    // 1. Save all completed sets to WorkoutLog
+    for (const exercise of exercises.value) {
+      for (const set of exercise.sets) {
+        if (set.completed) {
+          await fetch('http://localhost:8000/api/WorkoutLog/logSet', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user: userId,
+              exercise: exercise.name,
+              weight: set.actualWeight,
+              reps: set.actualReps,
+              duration: set.actualDuration
+            })
+          })
+        }
+      }
+    }
+    
+    // 2. If from template, update lastPerformed
+    if (templateName.value) {
+      await fetch('http://localhost:8000/api/WorkoutTemplate/markTemplateUsed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: userId,
+          name: templateName.value,
+          date: new Date().toISOString()
+        })
+      })
+
+    // 4. Check if template should be updated
+      await promptTemplateUpdate()
+
+    } else {
+      // Empty workout - just finish
+      router.push('/home')
+    }
+    
+  } catch (err) {
+    console.error('Failed to save workout:', err)
+    alert('Failed to save workout. Please try again.')
+  }
 }
 
+const promptTemplateUpdate = async () => {
+
+  // Detect what changed
+  const changes = detectTemplateChanges()
+  
+  if (!changes.hasChanges) {
+    // No changes - just finish
+    router.push('/home')
+    return
+  }
+  // First: Ask if they want to update or keep original template
+  showTemplateUpdatePrompt.value = true
+}
+
+const handleTemplateUpdate = async (shouldUpdate) => {
+  showTemplateUpdatePrompt.value = false
+  
+  if (shouldUpdate) {
+    await updateTemplate()
+  } 
+    router.push('/home')
+}
+
+
+const detectTemplateChanges = () => {
+  if (!originalTemplate.value) {
+    return { hasChanges: false, structureChanged: false, valuesChanged: false }
+  }
+  
+  const original = originalTemplate.value.exercises
+  const current = exercises.value.filter(ex => ex.sets.some(set => set.completed))
+  
+  // Check structure changes (exercises or set counts changed)
+  let structureChanged = false
+  
+  if (original.length !== current.length) {
+    structureChanged = true
+  } else {
+    for (let i = 0; i < original.length; i++) {
+      if (original[i].exercise !== current[i].name ||
+          original[i].sets.length !== current[i].sets.filter(s => s.completed).length) {
+        structureChanged = true
+        break
+      }
+    }
+  }
+  
+  // Check value changes (weight/reps/duration/rest changed)
+  let valuesChanged = false
+  
+  if (!structureChanged) {
+    for (let i = 0; i < original.length; i++) {
+      const origExercise = original[i]
+      const currExercise = current[i]
+      
+      for (let j = 0; j < origExercise.sets.length; j++) {
+        const origSet = origExercise.sets[j]
+        const currSet = currExercise.sets.filter(s => s.completed)[j]
+        
+        if (currSet &&
+            (origSet.targetWeight !== currSet.actualWeight ||
+             origSet.targetReps !== currSet.actualReps ||
+             origSet.targetDuration !== currSet.actualDuration ||
+             origSet.restTimer !== currSet.restTimer)) {
+          valuesChanged = true
+          break
+        }
+      }
+      
+      if (valuesChanged) break
+    }
+  }
+  
+  return {
+    hasChanges: structureChanged || valuesChanged,
+    structureChanged,
+    valuesChanged
+  }
+}
 
 const cancelWorkout = () => {
   const hasCompletedSets = exercises.value.some(ex => 
@@ -363,7 +492,33 @@ const confirmCancel = () => {
   router.push('/home')
 }
 
-
+const updateTemplate = async () => {
+  const userId = localStorage.getItem('userId')
+  
+  const formattedExercises = exercises.value.map(ex => ({
+    exercise: ex.name,
+    sets: ex.sets.map(set => ({
+      targetWeight: set.actualWeight,
+      targetReps: set.actualReps,
+      targetDuration: set.actualDuration,
+      restTimer: set.restTimer
+    }))
+  }))
+  
+  try {
+    await fetch('http://localhost:8000/api/WorkoutTemplate/updateTemplate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: userId,
+        name: templateName.value,
+        exercises: formattedExercises
+      })
+    })
+  } catch (err) {
+    console.error('Failed to update template:', err)
+  }
+}
 
 </script>
 
@@ -411,13 +566,12 @@ const confirmCancel = () => {
         <div class="sets-table">
           <div class="table-header">
             <span class="col-set">Set</span>
-            <span class="col-previous">Previous</span>
             <span class="col-input">{{ exercise.trackingType === 'reps' ? 'Weight' : 'Weight' }}</span>
             <span class="col-input">{{ exercise.trackingType === 'reps' ? 'Reps' : 'Duration' }}</span>
             <span class="col-check"></span>
           </div>
 
-          <div
+          <div 
             v-for="(set, setIndex) in exercise.sets"
             :key="setIndex"
             class="set-row-wrapper"
@@ -425,27 +579,15 @@ const confirmCancel = () => {
             <div :class="['set-row', { completed: set.completed }]">
               <span class="col-set">{{ setIndex + 1 }}</span>
     
-              <span class="col-previous">
-                <!-- Reps exercise -->
-                <span v-if="exercise.trackingType === 'reps' && (set.previousWeight || set.previousReps)" class="previous-data">
-                    {{ set.previousWeight || '-' }} × {{ set.previousReps || '-' }}
-                </span>
-                <!-- Duration exercise -->
-                <span v-else-if="exercise.trackingType === 'duration'" class="previous-data">
-                    {{ set.previousWeight || '-' }} × {{ set.previousDuration ? formatTime(set.previousDuration) : '-' }}
-                </span>
-                <span v-else>-</span>
-              </span>
-              <!-- Reps exercise: Weight input -->
+              <!-- Weight input -->
               <input
-                v-if="exercise.trackingType === 'reps'"
                 v-model.number="set.actualWeight"
                 type="number"
                 min="0"
                 step="5"
                 class="col-input input-field"
                 :disabled="set.completed"
-                placeholder="lbs"
+                placeholder="lbs (optional)"
               />
             
               <!-- Reps exercise: Reps input -->
@@ -459,28 +601,16 @@ const confirmCancel = () => {
                 placeholder="reps"
               />
 
-              <!-- Duration exercise: Weight + Duration -->
-              <input
-                v-if="exercise.trackingType === 'duration'"
-                v-model.number="set.actualWeight"
-                type="number"
-                min="0"
-                step="5"
-                class="col-input input-field"
-                :disabled="set.completed"
-                placeholder="lbs (optional)"
-              />
-
-              <div v-if="exercise.trackingType === 'duration'" class="col-input duration-cell-inline">
+              <!-- Duration exercise: Duration input-->
                 <TimeInput
-                  v-if="exercise.trackingType === 'duration'"
+                  v-else
                   v-model="set.actualDuration"
                   :disabled="set.completed"
                   placeholder="0:00"
                   class="col-input"
                 />
-              </div>
-    
+
+              <!-- Check button -->
               <button
                 @click="completeSet(exIndex, setIndex)"
                 :class="['col-check', 'check-btn', { 
@@ -490,6 +620,14 @@ const confirmCancel = () => {
                 :disabled="set.completed"
               >
                 {{ set.completed ? '✓' : '○' }}
+              </button>
+              <!-- Delete row button -->
+              <button
+                @click="deleteSet(exIndex, setIndex)"
+                class="delete-set-btn"
+                title="Delete set"
+              >
+                ×
               </button>
             </div>
 
@@ -517,14 +655,6 @@ const confirmCancel = () => {
               class="set-separator"
             ></div>
 
-            <!-- Delete row button -->
-            <button
-              @click="deleteSet(exIndex, setIndex)"
-              class="delete-set-btn"
-              title="Delete set"
-            >
-                ×
-            </button>
           </div>
         </div>
 
@@ -550,63 +680,75 @@ const confirmCancel = () => {
         Finish Workout
       </AppButton>
     </div>
-
-    <!-- Exercise Picker Modal -->
-    <ExercisePicker
-      :show="showExercisePicker"
-      @close="showExercisePicker = false"
-      @add="handleAddExercises"
-    />
-    <!-- Cancel Workout Modal -->
-    <ConfirmModal
-      :show="showCancelModal"
-      title="Cancel Workout?"
-      message="All progress will be lost. Are you sure you want to cancel?"
-      confirmText="Cancel Workout"
-      confirmVariant="danger"
-      cancelText="Continue Workout"
-      @confirm="confirmCancel"
-      @cancel="showCancelModal = false"
-    />
-
-    <!-- Finish Workout Modal -->
-    <ConfirmModal
-      :show="showFinishModal"
-      title="Finish Workout?"
-      :message="hasUnfinishedSets 
-        ? 'You have sets with data that aren\'t marked complete. Discard unfinished sets and finish workout?' 
-        : 'Ready to finish your workout?'"
-      :confirmText="hasUnfinishedSets ? 'Discard & Finish' : 'Finish Workout'"
-      confirmVariant="primary"
-      cancelText="Go Back"
-      @confirm="confirmFinish"
-      @cancel="showFinishModal = false"
-    />  
-    
-    <!-- Delete Exercise Modal -->
-    <ConfirmModal
-      :show="showDeleteExerciseModal"
-      title="Delete Exercise?"
-      :message="`Remove ${exerciseToDelete !== null ? exercises[exerciseToDelete]?.name : 'this exercise'} from workout?`"
-      confirmText="Delete"
-      confirmVariant="danger"
-      cancelText="Cancel"
-      @confirm="confirmDeleteExercise"
-      @cancel="showDeleteExerciseModal = false"
-    />
-
-    <!-- AI Coming Soon Modal -->
-    <ConfirmModal
-      :show="showAIModal"
-      title="AI Recommendations"
-      message="AI-powered progression guidance will be available in A5. This feature will analyze your workout history and suggest optimal weight, reps, and identify plateaus."
-      confirmText="Got it"
-      confirmVariant="primary"
-      @confirm="showAIModal = false"
-      @cancel="showAIModal = false"
-    />
-
   </div>
+
+  <!-- Exercise Picker Modal -->
+  <ExercisePicker
+    :show="showExercisePicker"
+    @close="showExercisePicker = false"
+    @add="handleAddExercises"
+  />
+  <!-- Cancel Workout Modal -->
+  <ConfirmModal
+    :show="showCancelModal"
+    title="Cancel Workout?"
+    message="All progress will be lost. Are you sure you want to cancel?"
+    confirmText="Cancel Workout"
+    confirmVariant="danger"
+    cancelText="Continue Workout"
+    @confirm="confirmCancel"
+    @cancel="showCancelModal = false"
+  />
+
+  <!-- Finish Workout Modal -->
+  <ConfirmModal
+    :show="showFinishModal"
+    title="Finish Workout?"
+    :message="hasUnfinishedSets 
+      ? 'You have sets with data that aren\'t marked complete. Discard unfinished sets and finish workout?' 
+      : 'Ready to finish your workout?'"
+    :confirmText="hasUnfinishedSets ? 'Discard & Finish' : 'Finish Workout'"
+    confirmVariant="primary"
+    cancelText="Go Back"
+    @confirm="confirmFinish"
+    @cancel="showFinishModal = false"
+  />  
+    
+  <!-- Delete Exercise Modal -->
+  <ConfirmModal
+    :show="showDeleteExerciseModal"
+    title="Delete Exercise?"
+    :message="`Remove ${exerciseToDelete !== null ? exercises[exerciseToDelete]?.name : 'this exercise'} from workout?`"
+    confirmText="Delete"
+    confirmVariant="danger"
+    cancelText="Cancel"
+    @confirm="confirmDeleteExercise"
+    @cancel="showDeleteExerciseModal = false"
+  />
+
+  <!-- AI Coming Soon Modal -->
+  <ConfirmModal
+    :show="showAIModal"
+    title="AI Recommendations"
+    message="AI-powered progression guidance will be available in A5. This feature will analyze your workout history and suggest optimal weight, reps, and identify plateaus."
+    confirmText="Got it"
+    confirmVariant="primary"
+    @confirm="showAIModal = false"
+    @cancel="showAIModal = false"
+  />
+
+  <!-- Template Update Prompt -->
+  <ConfirmModal
+    :show="showTemplateUpdatePrompt"
+    title="Update Template?"
+    message="You made changes during this workout. Would you like to update your template?"
+    confirmText="Update Template"
+    confirmVariant="primary"
+    cancelText="Keep Original"
+    @confirm="handleTemplateUpdate(true)"
+    @cancel="handleTemplateUpdate(false)"
+  />
+
 </template>
 
 <style scoped>
@@ -715,7 +857,7 @@ const confirmCancel = () => {
 .table-header,
 .set-row {
   display: grid;
-  grid-template-columns: 40px 80px 1fr 1fr 50px 30px;
+  grid-template-columns: 50px 1fr 1fr 60px 40px;
   gap: var(--spacing-xs);
   align-items: center;
   padding: var(--spacing-sm) 0;
@@ -729,18 +871,9 @@ const confirmCancel = () => {
 }
 
 .set-row {
-  display: grid;
-  grid-template-columns: 40px 80px 1fr 1fr 50px;
-  gap: var(--spacing-xs);
-  align-items: center;
   padding: var(--spacing-sm);
   border-radius: var(--radius-sm);
   transition: background-color 0.2s ease;
-}
-
-.previous-data {
-  opacity: 0.5;
-  font-size: 0.9rem;
 }
 
 .input-field {

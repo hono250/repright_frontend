@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppButton from '../components/common/AppButton.vue'
+import ConfirmModal from '../components/common/ConfirmModal.vue'
 
 const router = useRouter()
 
@@ -10,6 +11,8 @@ const templates = ref([])
 const loading = ref(true)
 const showTemplateModal = ref(false)
 const selectedTemplate = ref(null)
+const showDeleteModal = ref(false)
+const templateToDelete = ref(null)
 
 // Fetch templates on mount
 onMounted(async () => {
@@ -42,7 +45,13 @@ const fetchTemplates = async () => {
       templates.value = []
     } else {
       templates.value = data.templates || []
+           console.log('Templates with dates:', templates.value.map(t => ({
+        name: t.name,
+        lastPerformed: t.lastPerformed,
+        type: typeof t.lastPerformed
+      })))
     }
+
   } catch (err) {
     console.error('Failed to fetch templates:', err)
     templates.value = []
@@ -88,15 +97,52 @@ const formatLastPerformed = (date) => {
   
   const now = new Date()
   const lastPerformed = new Date(date)
-  const diffTime = Math.abs(now - lastPerformed)
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+    // Compare dates only (ignore time)
+  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const performedDate = new Date(lastPerformed.getFullYear(), lastPerformed.getMonth(), lastPerformed.getDate())
+
+  const diffTime = nowDate - performedDate
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
   
   if (diffDays === 0) return 'Today'
   if (diffDays === 1) return 'Yesterday'
-  if (diffDays < 30) return `${diffDays} days ago`
+  if (diffDays < 7) return `${diffDays} days ago`
+  if (diffDays < 30) return `${diffDays / 7} weeks ago`
   
-  const diffMonths = Math.floor(diffDays / 30)
-  return `${diffMonths} month${diffMonths > 1 ? 's' : ''} ago`
+  return lastPerformed.toLocaleDateString()
+}
+
+const deleteTemplate = (template) => {
+  templateToDelete.value = template
+  showDeleteModal.value = true
+  showTemplateModal.value = false // Close detail modal
+}
+
+const confirmDeleteTemplate = async () => {
+  if (!templateToDelete.value) return
+  
+  try {
+    const userId = localStorage.getItem('userId')
+    
+    await fetch('http://localhost:8000/api/WorkoutTemplate/deleteTemplate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: userId,
+        name: templateToDelete.value.name
+      })
+    })
+    
+    // Refresh template list
+    await fetchTemplates()
+    
+    showDeleteModal.value = false
+    templateToDelete.value = null
+  } catch (err) {
+    console.error('Failed to delete template:', err)
+    alert('Failed to delete template')
+  }
 }
 
 // Logout
@@ -161,37 +207,61 @@ const handleLogout = () => {
         </div>
       </div>
     </section>
+  </div>
 
-    <!-- Template Detail Modal -->
-    <div v-if="showTemplateModal" class="modal-overlay" @click="showTemplateModal = false">
-      <div class="modal-content" @click.stop>
-        <button @click="showTemplateModal = false" class="modal-close">×</button>
-        
-        <h2 class="modal-title">{{ selectedTemplate.name }}</h2>
-        
-        <!-- Exercise list -->
-        <div class="exercise-list">
-          <div v-for="ex in selectedTemplate.exercises" :key="ex.exercise" class="exercise-item">
-            <strong>{{ ex.exercise }}</strong>
-            <span class="set-count">{{ ex.sets.length }} sets</span>
-          </div>
-        </div>
+  <!-- Confirm Delete Modal -->
+  <ConfirmModal
+    :show="showDeleteModal"
+    title="Delete Template?"
+    :message="`Are you sure you want to delete '${templateToDelete?.name}'? This cannot be undone.`"
+    confirmText="Delete"
+    confirmVariant="danger"
+    cancelText="Cancel"
+    @confirm="confirmDeleteTemplate"
+    @cancel="showDeleteModal = false"
+  />
 
-        <!-- Actions -->
-        <div class="modal-actions">
-          <AppButton variant="secondary" @click="editTemplate(selectedTemplate)">
-            Edit Template
-          </AppButton>
-          <AppButton variant="secondary" @click="showTemplateModal = false">
-            Close
-          </AppButton>
-          <AppButton variant="primary" @click="startWorkout(selectedTemplate)">
-            Start Workout
-          </AppButton>
+  <!-- Template Detail Modal -->
+  <div v-if="showTemplateModal" class="modal-overlay" @click="showTemplateModal = false">
+    <div class="modal-content" @click.stop>
+      <button @click="showTemplateModal = false" class="modal-close">×</button>
+      
+      <h2 class="modal-title">{{ selectedTemplate.name }}</h2>
+      
+      <!-- Exercise list -->
+      <div class="exercise-list">
+        <div v-for="ex in selectedTemplate.exercises" :key="ex.exercise" class="exercise-item">
+          <strong>{{ ex.exercise }}</strong>
+          <span class="set-count">{{ ex.sets.length }} sets</span>
         </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="modal-actions">
+        <button 
+          @click="startWorkout(selectedTemplate)"
+          class="modal-btn primary-btn"
+        >
+          Start Workout
+        </button>
+        
+        <button 
+          @click="editTemplate(selectedTemplate)"
+          class="modal-btn yellow-btn"
+        >
+          Edit Template
+        </button>
+        
+        <button 
+          @click="deleteTemplate(selectedTemplate)"
+          class="modal-btn red-btn"
+        >
+          Delete Template
+        </button>
       </div>
     </div>
   </div>
+
 </template>
 
 <style scoped>
@@ -378,6 +448,7 @@ const handleLogout = () => {
   background-color: rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-sm);
   margin-bottom: var(--spacing-xs);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .set-count {
@@ -387,7 +458,40 @@ const handleLogout = () => {
 
 .modal-actions {
   display: flex;
+  flex-direction: column;
+  padding: var(--spacing-lg);
   gap: var(--spacing-sm);
+}
+
+.modal-btn {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  font-family: var(--font-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  font-style: italic;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 2px solid;
+}
+
+.primary-btn {
+  background-color: var(--green-success);
+  border-color: var(--green-success);
+  color: var(--text-primary);
+}
+
+.yellow-btn {
+  background-color: var(--yellow-transparent);
+  border-color: var(--yellow-primary);
+  color: var(--yellow-primary);
+}
+
+.red-btn {
+  background-color: var(--red-transparent);
+  border-color: var(--red-error);
+  color: var(--red-error);
 }
 
 /* Responsive */
