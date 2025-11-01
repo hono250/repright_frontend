@@ -21,9 +21,14 @@ const showCancelModal = ref(false)
 const showFinishModal = ref(false)
 const exerciseToDelete = ref(null)
 const showDeleteExerciseModal = ref(false)
-const showAIModal = ref(false) // TODO: get actual AI recomendation 
 const showTemplateUpdatePrompt = ref(false)
 const originalTemplate = ref(null)
+const showAIModal = ref(false)
+const showAIErrorModal = ref(false)
+const aiExerciseIndex = ref(null)
+const aiRecommendation = ref(null)
+const aiError = ref('')
+const loadingAI = ref(false)
 
 // Exercise structure:
 // {
@@ -63,6 +68,165 @@ onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval)
   if (restInterval) clearInterval(restInterval)
 })
+
+// Show AI modal
+const showAI = async (exerciseIndex) => {
+  aiExerciseIndex.value = exerciseIndex
+  loadingAI.value = true
+  showAIModal.value = true
+  
+  await fetchAIRecommendation(exerciseIndex)
+}
+
+// Fetch recommendation
+const fetchAIRecommendation = async (exerciseIndex) => {
+  const userId = localStorage.getItem('userId')
+  const exercise = exercises.value[exerciseIndex]
+
+  console.log('Fetching AI for:', exercise.name)
+
+  
+  try {
+    // 1. Check if duration exercise (not supported yet) TODO
+    if (exercise.trackingType === 'duration') {
+      aiError.value = 'AI recommendations are currently only available for weight/rep exercises.'
+      showAIModal.value = false
+      showAIErrorModal.value = true
+      loadingAI.value = false
+      return
+    }
+
+    // 2. Get workout summary
+    const summaryResponse = await fetch('http://localhost:8000/api/WorkoutLog/getSummary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: userId,
+        exercise: exercise.name,
+        weeksBack: 4
+      })
+    })
+
+    const summaryData = await summaryResponse.json()
+    console.log('Summary data:', summaryData)
+
+    // 3. Validate we have enough history
+    if (summaryData.error || !summaryData.summary?.recentSets || summaryData.summary.recentSets.length < 3) {
+      aiError.value = 'Not enough workout history. You need at least 3 completed sets from previous workouts to get AI recommendations.'
+      showAIModal.value = false
+      showAIErrorModal.value = true
+      loadingAI.value = false
+      return
+    }
+
+    // Convert date strings to Date objects
+    const workoutSummary = {
+      recentSets: summaryData.summary.recentSets.map(set => ({
+        weight: set.weight,
+        reps: set.reps,
+        duration: set.duration,
+        date: new Date(set.date) // Convert string to Date
+      })),
+      sessionCount: summaryData.summary.sessionCount,
+      lastWorkoutDate: new Date(summaryData.summary.lastWorkoutDate) // Convert string to Date
+    }
+
+    console.log('Converted summary:', workoutSummary) // Check if dates are Date objects
+
+    console.log('Sending workoutSummary:', workoutSummary)
+    console.log('First date type:', typeof workoutSummary.recentSets[0].date)
+    console.log('First date value:', workoutSummary.recentSets[0].date)
+
+
+    // 4. Generate new recommendation with LLM
+    const generateResponse = await fetch('http://localhost:8000/api/ProgressionGuidance/generateRecommendationLLM', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: userId,
+        exercise: exercise.name,
+        workoutSummary: workoutSummary
+      })
+    })
+
+    const generateData = await generateResponse.json()
+    console.log('Generate response:', generateData)
+    console.log('Generate error:', generateData.error)
+
+    if (generateData.error) {
+      console.log(generateData.error)
+      aiError.value = 'Unable to generate recommendation at this time. This could be due to inconsistent workout data or service availability. Please try again later.'
+      showAIModal.value = false
+      showAIErrorModal.value = true
+      loadingAI.value = false
+      return
+    }
+
+    // 5. Fetch the generated recommendation
+    const getResponse = await fetch('http://localhost:8000/api/ProgressionGuidance/getRecommendation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: userId,
+        exercise: exercise.name
+      })
+    })
+    
+    const recommendationData = await getResponse.json()
+    console.log('Recommendation data:', recommendationData)
+    
+    if (recommendationData.error || !recommendationData.recommendation) {
+      aiError.value = 'Unable to generate recommendation. Please try again.'
+      showAIModal.value = false
+      showAIErrorModal.value = true
+      loadingAI.value = false
+      return
+    }
+    
+    // 6. Success! Show recommendation
+    aiRecommendation.value = recommendationData.recommendation
+    loadingAI.value = false
+    
+  } catch (err) {
+    console.error('Failed to get AI recommendation:', err)
+    aiError.value = 'Failed to connect to AI service. Please try again.'
+    showAIModal.value = false
+    showAIErrorModal.value = true
+    loadingAI.value = false
+  }
+}
+
+
+// Apply recommendation
+const applyRecommendation = () => {
+  if (!aiRecommendation.value || aiExerciseIndex.value === null) return
+  
+  const exercise = exercises.value[aiExerciseIndex.value]
+  
+  // Add new set with recommended values
+  exercise.sets.push({
+    targetWeight: null,
+    targetReps: null,
+    targetDuration: null,
+    previousWeight: null,
+    previousReps: null,
+    previousDuration: null,
+    actualWeight: aiRecommendation.value.suggestedWeight || null,
+    actualReps: aiRecommendation.value.suggestedReps || null,
+    actualDuration: null, //TODO AI doesn't support duration exercisesyet
+    completed: false,
+    restTimer: 90
+  })
+  
+  showAIModal.value = false
+  aiRecommendation.value = null
+}
+
+// Dismiss recommendation
+const dismissRecommendation = () => {
+  showAIModal.value = false
+  aiRecommendation.value = null
+}
 
 // Load template if workout started from one
 const loadTemplate = async () => {
@@ -355,7 +519,8 @@ const confirmFinish = async () => {
     for (const exercise of exercises.value) {
       for (const set of exercise.sets) {
         if (set.completed) {
-          await fetch('http://localhost:8000/api/WorkoutLog/logSet', {
+
+          const response = await fetch('http://localhost:8000/api/WorkoutLog/logSet', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -553,8 +718,8 @@ const updateTemplate = async () => {
         <div class="exercise-header">
           <h3 class="exercise-name">{{ exercise.name }}</h3>
             <div class="exercise-actions">
-              <button @click="showAIModal = true"class="ai-btn">
-                AI 🤖
+              <button @click="showAI(exIndex)"class="ai-btn">
+                Progress Tips
               </button>
               <button @click="deleteExercise(exIndex)" class="delete-btn" title="Delete exercise">
             🗑️
@@ -726,17 +891,6 @@ const updateTemplate = async () => {
     @cancel="showDeleteExerciseModal = false"
   />
 
-  <!-- AI Coming Soon Modal -->
-  <ConfirmModal
-    :show="showAIModal"
-    title="AI Recommendations"
-    message="AI-powered progression guidance will be available in A5. This feature will analyze your workout history and suggest optimal weight, reps, and identify plateaus."
-    confirmText="Got it"
-    confirmVariant="primary"
-    @confirm="showAIModal = false"
-    @cancel="showAIModal = false"
-  />
-
   <!-- Template Update Prompt -->
   <ConfirmModal
     :show="showTemplateUpdatePrompt"
@@ -747,6 +901,58 @@ const updateTemplate = async () => {
     cancelText="Keep Original"
     @confirm="handleTemplateUpdate(true)"
     @cancel="handleTemplateUpdate(false)"
+  />
+
+  <!-- AI Recommendation Modal -->
+  <div v-if="showAIModal" class="modal-overlay">
+    <div class="modal-content">
+      <h2 class="modal-title">AI Recommendation</h2>
+      <h3 class="exercise-name-modal">{{ aiExerciseIndex !== null ? exercises[aiExerciseIndex]?.name : '' }}</h3>
+    
+      <!-- Loading -->
+      <div v-if="loadingAI" class="ai-loading">
+        <div class="spinner">🤖</div>
+        <p>Analyzing your performance...</p>
+      </div>
+    
+      <!-- Recommendation -->
+      <div v-else-if="aiRecommendation" class="ai-recommendation">
+        <div class="recommendation-values">
+          <div class="value-item">
+            <span class="label">Recommended:</span>
+            <span class="value">
+              {{ aiRecommendation.suggestedWeight || '-' }} lbs × 
+              {{ aiRecommendation.suggestedReps || '-' }}
+              <!-- {{ aiRecommendation.suggestedDuration ? 'sec' : 'reps' }} TODO, add support for duration exercises-->
+            </span>
+          </div>
+        </div>
+      
+        <div class="reasoning-box">
+          <div class="reasoning-label">Reasoning:</div>
+          <p>{{ aiRecommendation.reasoning }}</p>
+        </div>
+      
+        <div class="modal-actions-vertical">
+          <button @click="applyRecommendation" class="modal-btn primary-btn">
+            Apply Recommendation
+          </button>
+          <button @click="dismissRecommendation" class="modal-btn secondary-btn">
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Error Modal -->
+  <ConfirmModal
+    :show="showAIErrorModal"
+    title="AI Recommendation Unavailable"
+    :message="`Unable to generate recommendation: ${aiError}`"
+    confirmText="OK"
+    confirmVariant="primary"
+    @confirm="showAIErrorModal = false"
   />
 
 </template>
@@ -1089,6 +1295,135 @@ const updateTemplate = async () => {
   padding: var(--spacing-md);
   background-color: var(--bg-card);
   border-top: 2px solid var(--green-success);
+}
+
+.ai-loading {
+  text-align: center;
+  padding: var(--spacing-xl);
+}
+
+.spinner {
+  font-size: 3rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.exercise-name-modal {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-md);
+}
+
+.ai-recommendation {
+  padding: var(--spacing-md) 0;
+}
+
+.recommendation-values {
+  margin-bottom: var(--spacing-lg);
+}
+
+.value-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.value-item .label {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.value-item .value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--green-success);
+}
+
+.reasoning-box {
+  padding: var(--spacing-md);
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.reasoning-label {
+  font-size: 0.9rem;
+  color: var(--yellow-primary);
+  font-weight: 600;
+  margin-bottom: var(--spacing-xs);
+}
+
+.reasoning-box p {
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.modal-actions-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.primary-btn {
+  background-color: var(--green-success);
+  border-color: var(--green-success);
+  color: var(--text-primary);
+}
+
+.secondary-btn {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: var(--text-primary);
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4000;
+  padding: var(--spacing-md);
+}
+
+.modal-content {
+  background-color: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  max-width: 500px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-style: italic;
+  color: var(--yellow-primary);
+  margin-bottom: var(--spacing-md);
+}
+.modal-btn {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  font-family: var(--font-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  font-style: italic;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 2px solid;
 }
 
 @media (max-width: 640px) {
