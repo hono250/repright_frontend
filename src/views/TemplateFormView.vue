@@ -6,6 +6,7 @@ import AppInput from '../components/common/AppInput.vue'
 import TimeInput from '../components/common/TimeInput.vue'
 import ExercisePicker from '../components/workout/ExercisePicker.vue'
 import ConfirmModal from '../components/common/ConfirmModal.vue'
+import { templates, exercises as exercisesApi } from '../api'
 
 const router = useRouter()
 const route = useRoute()
@@ -45,31 +46,12 @@ onMounted(async () => {
 // Load existing template for editing
 const loadTemplate = async () => {
   try {
-    const userId = localStorage.getItem('userId')
-    
-    const response = await fetch('http://localhost:8000/api/WorkoutTemplate/getTemplate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        name: route.params.templateName
-      })
-    })
-    
-    const data = await response.json()
-    
-    if (data.error) {
-      alert('Failed to load template')
-      router.push('/home')
-      return
-    }
+    const data = await templates.get(route.params.templateName)
     
     templateName.value = data.template.name
-    
-    // Convert to form format and fetch exercise details
     exercises.value = data.template.exercises.map(ex => ({
       name: ex.exercise,
-      trackingType: 'reps', // Will fetch actual type
+      trackingType: 'reps',
       sets: ex.sets.map(set => ({
         targetWeight: set.targetWeight,
         targetReps: set.targetReps,
@@ -79,7 +61,6 @@ const loadTemplate = async () => {
     }))
     
     await fetchExerciseDetails()
-    
   } catch (err) {
     console.error('Failed to load template:', err)
     alert('Failed to load template')
@@ -87,24 +68,11 @@ const loadTemplate = async () => {
   }
 }
 
-// Fetch exercise details for trackingType
 const fetchExerciseDetails = async () => {
-  const userId = localStorage.getItem('userId')
-  
   for (const exercise of exercises.value) {
     try {
-      const response = await fetch('http://localhost:8000/api/ExerciseLibrary/getExercise', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: userId,
-          name: exercise.name
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (!data.error && data.exercise) {
+      const data = await exercisesApi.get(exercise.name)
+      if (data.exercise) {
         exercise.trackingType = data.exercise.trackingType
       }
     } catch (err) {
@@ -207,40 +175,21 @@ const saveTemplate = async () => {
   saving.value = true
   
   try {
-    const userId = localStorage.getItem('userId')
-    
-    // Format exercises for API
     const formattedExercises = exercises.value.map(ex => ({
       exercise: ex.name,
       sets: ex.sets
     }))
     
-    const endpoint = isEditMode.value 
-      ? '/api/WorkoutTemplate/updateTemplate'
-      : '/api/WorkoutTemplate/createTemplate'
-    
-    const response = await fetch(`http://localhost:8000${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        name: templateName.value.trim(),
-        exercises: formattedExercises
-      })
-    })
-    
-    const data = await response.json()
-    
-    if (data.error) {
-      alert(`Failed to save template: ${data.error}`)
-      return
+    if (isEditMode.value) {
+      await templates.update(templateName.value.trim(), formattedExercises)
+    } else {
+      await templates.create(templateName.value.trim(), formattedExercises)
     }
     
     router.push('/home')
-    
   } catch (err) {
     console.error('Failed to save template:', err)
-    alert('Failed to save template')
+    alert(`Failed to save template: ${err.message}`)
   } finally {
     saving.value = false
   }

@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppButton from '../components/common/AppButton.vue'
 import ConfirmModal from '../components/common/ConfirmModal.vue'
+import { templates as templatesApi, auth, clearToken } from '../api'
 
 const router = useRouter()
 
@@ -22,38 +23,14 @@ onMounted(async () => {
 // Fetch user's templates
 const fetchTemplates = async () => {
   try {
-    // Get userId from localStorage (TODO:will improve auth later)
-    const token = localStorage.getItem('authToken')
-    if (!token) {
-      router.push('/login')
-      return
-    }
-
-    // TODO:need to store userId after login, for now mock it
-    const userId = localStorage.getItem('userId') 
-
-    const response = await fetch('http://localhost:8000/api/WorkoutTemplate/getTemplates', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user: userId })
-    })
-
-    const data = await response.json()
-    
-    if (data.error) {
-      console.error('Error fetching templates:', data.error)
-      templates.value = []
-    } else {
-      templates.value = data.templates || []
-           console.log('Templates with dates:', templates.value.map(t => ({
-        name: t.name,
-        lastPerformed: t.lastPerformed,
-        type: typeof t.lastPerformed
-      })))
-    }
-
+    const data = await templatesApi.getAll()
+    templates.value = data.templates || []
+    console.log('Templates loaded:', templates.value.length)
   } catch (err) {
     console.error('Failed to fetch templates:', err)
+    if (err.message.includes('session') || err.message.includes('token')) {
+      router.push('/login')
+    }
     templates.value = []
   } finally {
     loading.value = false
@@ -116,27 +93,15 @@ const formatLastPerformed = (date) => {
 const deleteTemplate = (template) => {
   templateToDelete.value = template
   showDeleteModal.value = true
-  showTemplateModal.value = false // Close detail modal
+  showTemplateModal.value = false 
 }
 
 const confirmDeleteTemplate = async () => {
   if (!templateToDelete.value) return
   
   try {
-    const userId = localStorage.getItem('userId')
-    
-    await fetch('http://localhost:8000/api/WorkoutTemplate/deleteTemplate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        name: templateToDelete.value.name
-      })
-    })
-    
-    // Refresh template list
+    await templatesApi.delete(templateToDelete.value.name)
     await fetchTemplates()
-    
     showDeleteModal.value = false
     templateToDelete.value = null
   } catch (err) {
@@ -146,10 +111,15 @@ const confirmDeleteTemplate = async () => {
 }
 
 // Logout
-const handleLogout = () => {
-  localStorage.removeItem('authToken')
-  localStorage.removeItem('userId')
-  router.push('/login')
+const handleLogout = async () => {
+  try {
+    await auth.logout()
+  } catch (err) {
+    console.error('Logout error:', err)
+  } finally {
+    clearToken()
+    router.push('/login')
+  }
 }
 </script>
 

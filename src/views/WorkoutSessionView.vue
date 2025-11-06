@@ -5,6 +5,7 @@ import AppButton from '../components/common/AppButton.vue'
 import ExercisePicker from '../components/workout/ExercisePicker.vue'
 import TimeInput from '../components/common/TimeInput.vue'
 import ConfirmModal from '../components/common/ConfirmModal.vue'
+import { templates, exercises as exercisesApi, workoutLog, progression } from '../api'
 
 const router = useRouter()
 const route = useRoute()
@@ -80,14 +81,9 @@ const showAI = async (exerciseIndex) => {
 
 // Fetch recommendation
 const fetchAIRecommendation = async (exerciseIndex) => {
-  const userId = localStorage.getItem('userId')
   const exercise = exercises.value[exerciseIndex]
-
-  console.log('Fetching AI for:', exercise.name)
-
   
   try {
-    // 1. Check if duration exercise (not supported yet) TODO
     if (exercise.trackingType === 'duration') {
       aiError.value = 'AI recommendations are currently only available for weight/rep exercises.'
       showAIModal.value = false
@@ -96,22 +92,9 @@ const fetchAIRecommendation = async (exerciseIndex) => {
       return
     }
 
-    // 2. Get workout summary
-    const summaryResponse = await fetch('http://localhost:8000/api/WorkoutLog/getSummary', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        exercise: exercise.name,
-        weeksBack: 4
-      })
-    })
+    const summaryData = await workoutLog.getSummary(exercise.name, 4)
 
-    const summaryData = await summaryResponse.json()
-    console.log('Summary data:', summaryData)
-
-    // 3. Validate we have enough history
-    if (summaryData.error || !summaryData.summary?.recentSets || summaryData.summary.recentSets.length < 3) {
+    if (!summaryData.summary?.recentSets || summaryData.summary.recentSets.length < 3) {
       aiError.value = 'Not enough workout history. You need at least 3 completed sets from previous workouts to get AI recommendations.'
       showAIModal.value = false
       showAIErrorModal.value = true
@@ -119,63 +102,22 @@ const fetchAIRecommendation = async (exerciseIndex) => {
       return
     }
 
-    // Convert date strings to Date objects
     const workoutSummary = {
       recentSets: summaryData.summary.recentSets.map(set => ({
         weight: set.weight,
         reps: set.reps,
         duration: set.duration,
-        date: new Date(set.date) // Convert string to Date
+        date: new Date(set.date)
       })),
       sessionCount: summaryData.summary.sessionCount,
-      lastWorkoutDate: new Date(summaryData.summary.lastWorkoutDate) // Convert string to Date
+      lastWorkoutDate: new Date(summaryData.summary.lastWorkoutDate)
     }
 
-    console.log('Converted summary:', workoutSummary) // Check if dates are Date objects
+    await progression.generate(exercise.name, workoutSummary)
 
-    console.log('Sending workoutSummary:', workoutSummary)
-    console.log('First date type:', typeof workoutSummary.recentSets[0].date)
-    console.log('First date value:', workoutSummary.recentSets[0].date)
-
-
-    // 4. Generate new recommendation with LLM
-    const generateResponse = await fetch('http://localhost:8000/api/ProgressionGuidance/generateRecommendationLLM', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        exercise: exercise.name,
-        workoutSummary: workoutSummary
-      })
-    })
-
-    const generateData = await generateResponse.json()
-    console.log('Generate response:', generateData)
-    console.log('Generate error:', generateData.error)
-
-    if (generateData.error) {
-      console.log(generateData.error)
-      aiError.value = 'Unable to generate recommendation at this time. This could be due to inconsistent workout data or service availability. Please try again later.'
-      showAIModal.value = false
-      showAIErrorModal.value = true
-      loadingAI.value = false
-      return
-    }
-
-    // 5. Fetch the generated recommendation
-    const getResponse = await fetch('http://localhost:8000/api/ProgressionGuidance/getRecommendation', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        exercise: exercise.name
-      })
-    })
+    const recommendationData = await progression.get(exercise.name)
     
-    const recommendationData = await getResponse.json()
-    console.log('Recommendation data:', recommendationData)
-    
-    if (recommendationData.error || !recommendationData.recommendation) {
+    if (!recommendationData.recommendation) {
       aiError.value = 'Unable to generate recommendation. Please try again.'
       showAIModal.value = false
       showAIErrorModal.value = true
@@ -183,13 +125,12 @@ const fetchAIRecommendation = async (exerciseIndex) => {
       return
     }
     
-    // 6. Success! Show recommendation
     aiRecommendation.value = recommendationData.recommendation
     loadingAI.value = false
     
   } catch (err) {
     console.error('Failed to get AI recommendation:', err)
-    aiError.value = 'Failed to connect to AI service. Please try again.'
+    aiError.value = err.message || 'Failed to connect to AI service. Please try again.'
     showAIModal.value = false
     showAIErrorModal.value = true
     loadingAI.value = false
@@ -231,25 +172,7 @@ const dismissRecommendation = () => {
 // Load template if workout started from one
 const loadTemplate = async () => {
   try {
-    const userId = localStorage.getItem('userId')
-    
-    const response = await fetch('http://localhost:8000/api/WorkoutTemplate/getTemplate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        name: templateName.value
-      })
-    })
-    
-    const data = await response.json()
-    
-    if (data.error) {
-      console.error('Failed to load template:', data.error)
-      return
-    }
-
-    // Access the nested template object
+    const data = await templates.get(templateName.value)
     const template = data.template
 
     if (!template || !template.exercises) {
@@ -257,34 +180,27 @@ const loadTemplate = async () => {
       return
     }
 
-    // STORE ORIGINAL for comparison later
     originalTemplate.value = JSON.parse(JSON.stringify(template))
     
-    // Convert template to workout session format
     exercises.value = template.exercises.map(ex => ({
       name: ex.exercise,
-      trackingType: 'reps', // Will be updated by fetchExerciseDetails
+      trackingType: 'reps',
       sets: ex.sets.map(set => ({
         targetWeight: set.targetWeight,
         targetReps: set.targetReps,
         targetDuration: set.targetDuration,
-        previousWeight: null, // TODO: Fetch from WorkoutLog
+        previousWeight: null,
         previousReps: null,
         previousDuration: null,
-        actualWeight: set.targetWeight, // Pre-fill from template
-        actualReps: set.targetReps,     // Pre-fill from template
-        actualDuration: set.targetDuration, // Pre-fill from template
+        actualWeight: set.targetWeight,
+        actualReps: set.targetReps,
+        actualDuration: set.targetDuration,
         completed: false,
         restTimer: set.restTimer || 90
       }))
     }))
     
-    // // Fetch previous workout data for each exercise
-    // await fetchPreviousWorkouts()
-
-    // Fetch exercise details to get trackingType
     await fetchExerciseDetails()
-
     
   } catch (err) {
     console.error('Error loading template:', err)
@@ -324,30 +240,20 @@ const loadTemplate = async () => {
 
 // Fetch exercise details to get trackingType
 const fetchExerciseDetails = async () => {
-  const userId = localStorage.getItem('userId')
-  
   for (const exercise of exercises.value) {
     try {
-      const response = await fetch('http://localhost:8000/api/ExerciseLibrary/getExercise', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: userId,
-          name: exercise.name
-        })
-      })
+      const data = await exercisesApi.get(exercise.name)
       
-      const data = await response.json()
-      
-      if (!data.error && data.exercise) {
+      if (data.exercise) {
         exercise.trackingType = data.exercise.trackingType
       }
     } catch (err) {
       console.error('Failed to fetch exercise details:', err)
-      exercise.trackingType = 'reps' // Default fallback
+      exercise.trackingType = 'reps'
     }
   }
 }
+
 
 // Add exercises from picker
 const handleAddExercises = (selectedExercises) => {
@@ -507,51 +413,28 @@ const finishWorkout = () => {
 }
 
 const confirmFinish = async () => {
-
-  showFinishModal.value = false  // Close the modal first
+  showFinishModal.value = false
   
   if (!canFinishWorkout.value) return
   
-  const userId = localStorage.getItem('userId')
-  
   try {
-    // 1. Save all completed sets to WorkoutLog
     for (const exercise of exercises.value) {
       for (const set of exercise.sets) {
         if (set.completed) {
-
-          const response = await fetch('http://localhost:8000/api/WorkoutLog/logSet', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user: userId,
-              exercise: exercise.name,
-              weight: set.actualWeight,
-              reps: set.actualReps,
-              duration: set.actualDuration
-            })
-          })
+          await workoutLog.logSet(
+            exercise.name,
+            set.actualWeight,
+            set.actualReps,
+            set.actualDuration
+          )
         }
       }
     }
     
-    // 2. If from template, update lastPerformed
     if (templateName.value) {
-      await fetch('http://localhost:8000/api/WorkoutTemplate/markTemplateUsed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: userId,
-          name: templateName.value,
-          date: new Date().toISOString()
-        })
-      })
-
-    // 4. Check if template should be updated
+      await templates.markUsed(templateName.value, new Date())
       await promptTemplateUpdate()
-
     } else {
-      // Empty workout - just finish
       router.push('/home')
     }
     
@@ -671,15 +554,7 @@ const updateTemplate = async () => {
   }))
   
   try {
-    await fetch('http://localhost:8000/api/WorkoutTemplate/updateTemplate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        name: templateName.value,
-        exercises: formattedExercises
-      })
-    })
+    await templates.update(templateName.value, formattedExercises)
   } catch (err) {
     console.error('Failed to update template:', err)
   }

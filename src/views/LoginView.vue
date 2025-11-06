@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppButton from '../components/common/AppButton.vue'
 import AppInput from '../components/common/AppInput.vue'
+import { auth, setToken } from '../api'
 
 const router = useRouter()
 
@@ -33,78 +34,19 @@ const handleSubmit = async () => {
   try {
     if (isLogin.value) {
       // LOGIN
-      const response = await fetch('http://localhost:8000/api/UserAuthentication/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.value,
-          password: password.value
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (data.error) {
-        error.value = data.error
-      } else {
-        // Store token
-        localStorage.setItem('authToken', data.token)
-        
-        // Now authenticate to get userId
-        const authResponse = await fetch('http://localhost:8000/api/UserAuthentication/authenticate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: data.token })
-        })
-        
-        const authData = await authResponse.json()
-        
-        if (authData.userId) {
-          localStorage.setItem('userId', authData.userId)
-          router.push('/home')
-        } else {
-          error.value = 'Authentication failed'
-        }
-      }
+      const { token } = await auth.login(username.value, password.value)
+      setToken(token)
+      router.push('/home')
     } else {
       // REGISTER
-      const response = await fetch('http://localhost:8000/api/UserAuthentication/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.value,
-          password: password.value
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (data.error) {
-        error.value = data.error
-      } else {
-        // After register, store userId and auto-login
-        localStorage.setItem('userId', data.userId)
-        
-        // Now login to get token
-        const loginResponse = await fetch('http://localhost:8000/api/UserAuthentication/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: username.value,
-            password: password.value
-          })
-        })
-        
-        const loginData = await loginResponse.json()
-        
-        if (loginData.token) {
-          localStorage.setItem('authToken', loginData.token)
-          router.push('/home')
-        }
-      }
+      await auth.register(username.value, password.value)
+      // Auto-login after register
+      const { token } = await auth.login(username.value, password.value)
+      setToken(token)
+      router.push('/home')
     }
   } catch (err) {
-    error.value = 'Connection error. Please try again.'
+    error.value = err.message || 'Authentication failed'
     console.error('Auth error:', err)
   } finally {
     loading.value = false

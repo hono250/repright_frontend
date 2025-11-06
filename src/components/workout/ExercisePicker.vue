@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import AppButton from '../common/AppButton.vue'
 import AppInput from '../common/AppInput.vue'
+import { exercises as exercisesApi } from '../../api'
 
 const props = defineProps({
   show: {
@@ -44,30 +45,19 @@ const muscleGroupMapping = {
   'Other': ['Other']
 }
 
-// Fetch exercises
+// Fetch exercises using API
 const fetchExercises = async () => {
   loading.value = true
   
   try {
-    const userId = localStorage.getItem('userId')
+    const filters = {
+      equipment: selectedFilters.value.equipment || undefined,
+      classification: selectedFilters.value.classification || undefined,
+      forceType: selectedFilters.value.forceType || undefined
+    }
     
-    // Fetch ALL exercises (no muscle group filter sent to backend)
-    const response = await fetch('http://localhost:8000/api/ExerciseLibrary/searchExercises', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: userId,
-        query: searchQuery.value || 'a',
-        filters: {
-          equipment: selectedFilters.value.equipment || undefined,
-          classification: selectedFilters.value.classification || undefined,
-          forceType: selectedFilters.value.forceType || undefined
-        }
-      })
-    })
-    
-    const data = await response.json()
-    let results = Array.isArray(data) ? data : (data.exercises || [])
+    const data = await exercisesApi.search(searchQuery.value || 'a', filters)
+    let results = data.exercises || []
     
     // Client-side filter by muscle group category
     if (selectedFilters.value.muscleGroup) {
